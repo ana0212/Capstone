@@ -1,9 +1,13 @@
-# data_cleaning.py
-import re
 import pandas as pd
+import numpy as np
+import re
 
-def clean_c_charge_degree(degree):
-    return re.sub(r'[^a-zA-Z]', '', degree)
+########################################
+# Define data cleaning functions
+
+def clean_c_charge_degree(df):
+    df['c_charge_degree'] = df['c_charge_degree'].str.replace(r'\(|\)', '', regex=True)
+    return df
 
 def extract_year(date):
     return pd.to_datetime(date).year
@@ -43,7 +47,7 @@ def clean_data(df):
     df = df.drop(columns=['id', 'name', 'c_case_number', 'c_offense_date', 'c_arrest_date'])
     
     # Apply custom transformations
-    df['c_charge_degree'] = df['c_charge_degree'].apply(clean_c_charge_degree)
+    df = clean_c_charge_degree(df)
     df['c_charge_desc'] = df['c_charge_desc'].apply(agrupar_tipo_crime)
     # Group races
     df = group_races(df)
@@ -58,3 +62,6 @@ def clean_data(df):
     df = process_dates(df)
     
     return df
+
+# End data cleaning functions
+########################################
