@@ -6,25 +6,17 @@ import pandas as pd
 from flask import Flask, jsonify, request
 from peewee import (
     SqliteDatabase, Model, IntegerField,
-    FloatField, TextField, BooleanField, IntegrityError
+    FloatField, TextField, BooleanField
 )
-from playhouse.shortcuts import model_to_dict
 from playhouse.db_url import connect
-import numpy as np
-import re
-from data_cleaning import clean_data  # Importando a função clean_data
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, PolynomialFeatures, FunctionTransformer
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from xgboost import XGBClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import VotingClassifier
+from data_cleaning import clean_data
 
 ########################################
 # Begin database stuff
 
+app = Flask(__name__)
+
+# Configuração do banco de dados
 DB = connect(os.environ.get('DATABASE_URL') or 'sqlite:///predictions.db')
 
 class Prediction(Model):
@@ -42,82 +34,15 @@ DB.create_tables([Prediction], safe=True)
 ########################################
 
 ########################################
-# Define data cleaning functions
-
-def clean_c_charge_degree(degree):
-    return re.sub(r'[^a-zA-Z]', '', degree)
-
-def extract_year(date):
-    return pd.to_datetime(date).year
-
-def extract_month(date):
-    return pd.to_datetime(date).month
-
-def process_dates(df):
-    df['dob_year'] = df['dob'].apply(extract_year)
-    df['c_jail_year'] = df['c_jail_in'].apply(extract_year)
-    df['c_jail_month'] = df['c_jail_in'].apply(extract_month)
-    return df.drop(columns=['dob', 'c_jail_in'])
-
-def agrupar_tipo_crime(descricao):
-    if pd.isna(descricao):
-        return 'other'
-    descricao = descricao.lower()
-    if 'battery' in descricao or 'assault' in descricao or 'violence' in descricao or 'murder' in descricao or 'batt' in descricao:
-        return 'violence'
-    elif 'theft' in descricao or 'burglary' in descricao or 'robbery' in descricao:
-        return 'robbery'
-    elif 'drug' in descricao or 'possession' in descricao or 'trafficking' in descricao or 'poss' in descricao or 'cocaine' in descricao or 'heroin' in descricao or 'deliver' in descricao or 'traffick' in descricao:
-        return 'drugs'
-    elif 'driving' in descricao or 'traffic' in descricao or 'license' in descricao or 'driv' in descricao or 'vehicle' in descricao or 'conduct' in descricao:
-        return 'traffic'
-    else:
-        return 'other'
-
-def group_races(df):
-    race_map = df['race'].value_counts()
-    common_races = race_map[race_map >= 50].index.tolist()
-    df['race_grouped'] = df['race'].apply(lambda x: x if x in common_races else 'Other')
-    return df.drop(columns=['race'])
-
-def clean_data(df):
-    # Drop columns
-    df = df.drop(columns=['id', 'name', 'c_case_number', 'c_offense_date', 'c_arrest_date'])
-    
-    # Apply custom transformations
-    df['c_charge_degree'] = df['c_charge_degree'].apply(clean_c_charge_degree)
-    df['c_charge_desc'] = df['c_charge_desc'].apply(agrupar_tipo_crime)
-    # Group races
-    df = group_races(df)
-    
-    # Convert to categorical
-    df['c_charge_desc'] = pd.Categorical(df['c_charge_desc'], categories=['violence', 'robbery', 'drugs', 'traffic', 'other'])
-    df['sex'] = df['sex'].astype('category')
-    df['race_grouped'] = df['race_grouped'].astype('category')
-    df['c_charge_degree'] = df['c_charge_degree'].astype('category')
-    
-    # Process dates
-    df = process_dates(df)
-    
-    return df
-
-# End data cleaning functions
-########################################
-
-########################################
 # Unpickle the previously-trained model
-
 
 with open('columns.json') as fh:
     columns = json.load(fh)
 
-
 with open('dtypes.pkl', 'rb') as fh:
     dtypes = pickle.load(fh)
 
-
 pipeline = joblib.load('pipeline.pkl')
-
 
 # End model un-pickling
 ########################################
@@ -125,17 +50,18 @@ pipeline = joblib.load('pipeline.pkl')
 ########################################
 # Begin webserver stuff
 
-app = Flask(__name__)
-
 @app.route('/will_recidivate/', methods=['POST'])
 def will_recidivate():
-    request_data = request.json
+    try:
+        request_data = request.get_json()
+    except Exception as e:
+        return jsonify({"error": "Failed to decode JSON object"}), 400
 
-    # Função para verificar se um valor está dentro de um intervalo
+    # Function to validate a number
     def is_within_range(value, min_value, max_value):
         return min_value <= value <= max_value
 
-    # Função para validar campos numéricos
+    # Function to validate numerical fields
     def validate_numerical_field(value, field_name, min_value, max_value):
         if pd.isna(value):
             return None  # Permitir valores NaN
@@ -146,7 +72,7 @@ def will_recidivate():
         else:
             return None
 
-    # Função para validar campos categóricos
+    # Function to validate categorical fields
     def validate_categorical_field(value, field_name, valid_values):
         if pd.isna(value):
             return None  # Permitir valores NaN
@@ -154,7 +80,7 @@ def will_recidivate():
             return f"Invalid value '{value}' for '{field_name}'"
         return None
 
-    # Função para validar campos de data/hora
+    # Function to validate datetime fields
     def validate_datetime(value, field_name):
         if pd.isna(value):
             return None  # Permitir valores NaN
@@ -171,20 +97,28 @@ def will_recidivate():
         response["error"] = "Missing observation_id"
         return jsonify(response), 400
 
-    # Verificar se o ID já existe no banco de dados
+    # Verify if ID already exists
     if Prediction.select().where(Prediction.observation_id == observation_id).exists():
         response["error"] = "Observation ID already exists"
         return jsonify(response), 400
 
-    # Validar campos
+    # Validate unexpected columns
+    expected_fields = set(["id", "name", "sex", "dob", "race", "juv_fel_count", "juv_misd_count", "juv_other_count", "priors_count", "c_case_number", "c_charge_degree", "c_charge_desc", "c_offense_date", "c_arrest_date", "c_jail_in"])
+    received_fields = set(request_data.keys())
+    unexpected_fields = received_fields - expected_fields
+    if unexpected_fields:
+        response["error"] = f"Unexpected fields: {', '.join(unexpected_fields)}"
+        return jsonify(response), 400
+
+    # Validate fields
     data = request_data
-    required_fields = ["id", "name", "sex", "dob", "race", "juv_fel_count", "juv_misd_count", "juv_other_count", "priors_count", "c_case_number", "c_charge_degree", "c_charge_desc", "c_offense_date", "c_arrest_date", "c_jail_in"]
+    required_fields = list(expected_fields)
     missing_fields = [field for field in required_fields if field not in data]
     if missing_fields:
         response["error"] = f"Missing fields: {', '.join(missing_fields)}"
         return jsonify(response), 400
 
-    # Validar campos categóricos
+    # Validate categorical fields
     valid_categories = {
         'sex': ['Male', 'Female'],
         'c_charge_degree': ['F', 'M'],
@@ -198,7 +132,7 @@ def will_recidivate():
                 response["error"] = error_message
                 return jsonify(response), 400
 
-    # Validar campos numéricos
+    # Validate numerical fields
     numerical_features = {"juv_fel_count": (0, 50), "juv_misd_count": (0, 50), "juv_other_count": (0, 50), "priors_count": (0, 50)}  
     for feature, (min_value, max_value) in numerical_features.items():
         if feature in data:
@@ -207,7 +141,7 @@ def will_recidivate():
                 response["error"] = error_message
                 return jsonify(response), 400
 
-    # Validar campos de data/hora
+    # Validate datetime fields
     datetime_features = ["dob", "c_offense_date", "c_arrest_date", "c_jail_in"]
     for feature in datetime_features:
         if feature in data:
@@ -216,7 +150,7 @@ def will_recidivate():
                 response["error"] = error_message
                 return jsonify(response), 400
 
-    # Converter os dados de entrada para DataFrame e ajustar os tipos de dados
+    # Convert and clean the entries
     try:
         # Aplicar transformações do pipeline
         df = pd.DataFrame([data])
@@ -264,9 +198,6 @@ def recidivism_result():
     except Prediction.DoesNotExist:
         error_msg = f'Observation ID: {obs["id"]} does not exist'
         return jsonify({'error': error_msg})
-
-# End webserver stuff
-########################################
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', debug=True, port=5000)
