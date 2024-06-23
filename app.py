@@ -112,11 +112,11 @@ def will_recidivate():
 
     # Validate fields
     data = request_data
-    required_fields = list(expected_fields)
-    missing_fields = [field for field in required_fields if field not in data]
-    if missing_fields:
-        response["error"] = f"Missing fields: {', '.join(missing_fields)}"
-        return jsonify(response), 400
+
+    # Ensure all expected fields are present
+    for field in expected_fields:
+        if field not in data:
+            data[field] = None
 
     # Validate categorical fields
     valid_categories = {
