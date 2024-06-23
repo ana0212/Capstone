@@ -6,7 +6,8 @@ import re
 # Define data cleaning functions
 
 def clean_c_charge_degree(df):
-    df['c_charge_degree'] = df['c_charge_degree'].str.replace(r'\(|\)', '', regex=True)
+    if 'c_charge_degree' in df.columns:
+        df['c_charge_degree'] = df['c_charge_degree'].str.replace(r'\(|\)', '', regex=True)
     return df
 
 def extract_year(date):
@@ -16,10 +17,12 @@ def extract_month(date):
     return pd.to_datetime(date).month
 
 def process_dates(df):
-    df['dob_year'] = df['dob'].apply(extract_year)
-    df['c_jail_year'] = df['c_jail_in'].apply(extract_year)
-    df['c_jail_month'] = df['c_jail_in'].apply(extract_month)
-    return df.drop(columns=['dob', 'c_jail_in'])
+    if 'dob' in df.columns:
+        df['dob_year'] = df['dob'].apply(extract_year)
+    if 'c_jail_in' in df.columns:
+        df['c_jail_year'] = df['c_jail_in'].apply(extract_year)
+        df['c_jail_month'] = df['c_jail_in'].apply(extract_month)
+    return df.drop(columns=['dob', 'c_jail_in'], errors='ignore')
 
 def agrupar_tipo_crime(descricao):
     if pd.isna(descricao):
@@ -37,26 +40,39 @@ def agrupar_tipo_crime(descricao):
         return 'other'
 
 def group_races(df):
-    race_map = df['race'].value_counts()
-    common_races = race_map[race_map >= 50].index.tolist()
-    df['race_grouped'] = df['race'].apply(lambda x: x if x in common_races else 'Other')
-    return df.drop(columns=['race'])
+    if 'race' in df.columns:
+        race_map = df['race'].value_counts()
+        common_races = race_map[race_map >= 50].index.tolist()
+        df['race_grouped'] = df['race'].apply(lambda x: x if x in common_races else 'Other')
+        df = df.drop(columns=['race'], errors='ignore')
+    return df
 
 def clean_data(df):
+    # Ensure all expected columns are present
+    expected_columns = ['juv_fel_count', 'juv_misd_count', 'juv_other_count', 'priors_count', 'dob', 'c_jail_in', 'c_case_number', 'c_charge_degree', 'c_charge_desc', 'c_offense_date', 'c_arrest_date', 'sex', 'race']
+    for col in expected_columns:
+        if col not in df.columns:
+            df[col] = np.nan
+    
     # Drop columns
-    df = df.drop(columns=['id', 'name', 'c_case_number', 'c_offense_date', 'c_arrest_date'])
+    df = df.drop(columns=['id', 'name', 'c_case_number', 'c_offense_date', 'c_arrest_date'], errors='ignore')
     
     # Apply custom transformations
     df = clean_c_charge_degree(df)
-    df['c_charge_desc'] = df['c_charge_desc'].apply(agrupar_tipo_crime)
+    if 'c_charge_desc' in df.columns:
+        df['c_charge_desc'] = df['c_charge_desc'].apply(agrupar_tipo_crime)
     # Group races
     df = group_races(df)
     
     # Convert to categorical
-    df['c_charge_desc'] = pd.Categorical(df['c_charge_desc'], categories=['violence', 'robbery', 'drugs', 'traffic', 'other'])
-    df['sex'] = df['sex'].astype('category')
-    df['race_grouped'] = df['race_grouped'].astype('category')
-    df['c_charge_degree'] = df['c_charge_degree'].astype('category')
+    if 'c_charge_desc' in df.columns:
+        df['c_charge_desc'] = pd.Categorical(df['c_charge_desc'], categories=['violence', 'robbery', 'drugs', 'traffic', 'other'])
+    if 'sex' in df.columns:
+        df['sex'] = df['sex'].astype('category')
+    if 'race_grouped' in df.columns:
+        df['race_grouped'] = df['race_grouped'].astype('category')
+    if 'c_charge_degree' in df.columns:
+        df['c_charge_degree'] = df['c_charge_degree'].astype('category')
     
     # Process dates
     df = process_dates(df)
